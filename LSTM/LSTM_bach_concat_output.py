@@ -12,18 +12,19 @@ from tqdm import tqdm
 np.set_printoptions(threshold=sys.maxsize)
 np.set_printoptions(precision=3)
 
+# returns concatenated onehot encoding for each note 
 def one_hot_encode(y: np.ndarray, voices: np.ndarray) -> np.ndarray:
     # unique set of notes in the voice
     unique_notes = np.unique(voices)
 
     # initialize return array
-    encoded = np.zeros((y.shape[0], y.shape[1], len(unique_notes)), dtype=np.float32)
+    encoded = np.zeros((y.shape[0], y.shape[1] * len(unique_notes)), dtype=np.float32)
     
     # one hot encode each note
     for timestep, notes in enumerate(y):
         for voice, note in enumerate(notes):
             one_hot_location = np.nonzero(unique_notes == note)[0][0]
-            encoded[timestep][voice][one_hot_location] = 1
+            encoded[timestep][one_hot_location + voice * len(unique_notes)] = 1 
 
     return encoded
 
@@ -39,7 +40,7 @@ class NotesDataset(Dataset):
             self.x[i] = voices[i : i + window_size]
 
         # initialize y data -> 4 following target notes per time window 
-        self.y = np.zeros((self.nr_samples, self.nr_voices))
+        self.y = np.zeros((self.nr_samples, self.nr_voices), dtype = np.float32)
         for j in range(self.y.shape[0]):
             self.y[j] = voices[j + window_size]
 
@@ -57,7 +58,7 @@ class NotesDataset(Dataset):
         return self.nr_samples
 
 class LSTM_model(nn.Module):
-    def __init__(self, input_size, output_size, hidden_size, num_layers, batch_size):
+    def __init__(self, input_size, output_size, hidden_size, num_layers):
         super(LSTM_model, self).__init__()
         self.hidden_size = hidden_size
         self.num_layers = num_layers
@@ -72,9 +73,11 @@ class LSTM_model(nn.Module):
         cn = torch.zeros(self.num_layers, input.size(0), self.hidden_size)
 
         # simple forward function
+        # out = self.conv2D(input)
         out, (hn, cn) = self.lstm(input, (hn, cn)) 
-        print(out.shape)
         out = self.linear(out)
+        # print(out[:,-1,:].shape)
+        # print(out.shape)
 
         return out
 
@@ -83,21 +86,31 @@ def training(model, dataloader:DataLoader, nr_epochs, optimizer, loss_func):
     total_samples = len(dataloader.dataset)
     nr_batches = len(dataloader)
 
-    for epoch in range(nr_epochs):
-        for index, (inputs, labels) in enumerate(tqdm(dataloader)):
+    # keep track of loss per epoch
+    running_loss = 0.0
+
+    for epoch in tqdm(range(nr_epochs)):
+        for index, (inputs, labels) in enumerate(dataloader):
             # reset gradient function of weights
             optimizer.zero_grad()
             # forward
             prediction = model(inputs)
-            # print(prediction.shape)
             # calculate loss
             loss = loss_func(prediction, labels)
             # backward
             loss.backward()
             # step
             optimizer.step()
+            # print(inputs)
+            # print(labels)
+            # print(prediction)
+            # print(loss.item())
 
-        print("Epoch:", epoch, "  Loss:", loss.item())
+            # add to running loss
+            running_loss += loss.item()
+            
+        print("Epoch:", epoch, "  Loss:", (running_loss/len(dataloader)))
+        # break
 
 
 def main():
@@ -121,24 +134,19 @@ def main():
         
 
     # create dataloader
-    batch_size = 4
-    dataloader = DataLoader(dataset=dataset, batch_size=batch_size, shuffle=True, num_workers=2)
+    dataloader = DataLoader(dataset=dataset, batch_size=4, shuffle=True, num_workers=2)
     features, labels = next(iter(dataloader))
     print("input size:", features.size(), "- Output size:", labels.size())
 
     # create model, nr_layers = number of sequential LSTM layers
     hidden_size = 32
     nr_layers = 1
-    input_size = 4
-    output_size = 46
-    lstm_model = LSTM_model(input_size, output_size, hidden_size, nr_layers, batch_size)
+    lstm_model = LSTM_model(4, 184, hidden_size, nr_layers)
 
     # loss function and optimizer
-    #   multi lable one hot encoded prediction only works with
-    #   BCEwithlogitloss
+    #   multi lable one hot encoded prediction only works with BCEwithlogitloss
     loss_func = nn.BCEWithLogitsLoss()
-    # loss_func = nn.NLLLoss2d()
-    optimizer = optim.Adam(lstm_model.parameters(), lr=0.01)
+    optimizer = optim.Adam(lstm_model.parameters(), lr=0.005)
     
     # training loop
     training(lstm_model, dataloader, 100, optimizer, loss_func)
