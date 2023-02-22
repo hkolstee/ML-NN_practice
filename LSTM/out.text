@@ -1,2 +1,0 @@
-!
-input size: torch.Size([4, 4, 32]) - Output size: torch.Size([4, 4, 46])

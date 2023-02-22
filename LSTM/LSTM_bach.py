@@ -7,10 +7,10 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 
+from sklearn.preprocessing import StandardScaler
+
 from tqdm import tqdm
 
-np.set_printoptions(threshold=sys.maxsize)
-np.set_printoptions(precision=3)
 
 def one_hot_encode(y: np.ndarray, voices: np.ndarray) -> np.ndarray:
     # unique set of notes in the voice
@@ -33,10 +33,15 @@ class NotesDataset(Dataset):
         self.nr_samples = voices.shape[0] - window_size
         self.nr_voices = voices.shape[1]
 
+        # scale x (-> time information leak here but for now whatever)
+        scaler = StandardScaler()
+        scaler.fit(voices)
+        scaled_voices = scaler.transform(voices)
+
         # initialize x data -> window_size amount of notes of 4 voices each per prediction
         self.x = np.zeros((self.nr_samples, window_size, self.nr_voices), dtype=np.float32)
         for i in range(self.x.shape[0]):
-            self.x[i] = voices[i : i + window_size]
+            self.x[i] = scaled_voices[i : i + window_size]
 
         # initialize y data -> 4 following target notes per time window 
         self.y = np.zeros((self.nr_samples, self.nr_voices))
@@ -71,10 +76,11 @@ class LSTM_model(nn.Module):
         hn = torch.zeros(self.num_layers, input.size(0), self.hidden_size)
         cn = torch.zeros(self.num_layers, input.size(0), self.hidden_size)
 
+
         # simple forward function
         out, (hn, cn) = self.lstm(input, (hn, cn)) 
-        print(out.shape)
-        out = self.linear(out)
+            # take the last 5 entries of the second dimension which represents the sequence
+        out = self.linear(out[:,-5:-1,:])
 
         return out
 
@@ -121,7 +127,7 @@ def main():
         
 
     # create dataloader
-    batch_size = 4
+    batch_size = 1
     dataloader = DataLoader(dataset=dataset, batch_size=batch_size, shuffle=True, num_workers=2)
     features, labels = next(iter(dataloader))
     print("input size:", features.size(), "- Output size:", labels.size())
@@ -137,7 +143,6 @@ def main():
     #   multi lable one hot encoded prediction only works with
     #   BCEwithlogitloss
     loss_func = nn.BCEWithLogitsLoss()
-    # loss_func = nn.NLLLoss2d()
     optimizer = optim.Adam(lstm_model.parameters(), lr=0.01)
     
     # training loop
