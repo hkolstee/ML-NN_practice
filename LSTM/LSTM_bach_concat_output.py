@@ -18,16 +18,30 @@ from tqdm import tqdm
 # returns concatenated onehot encoding for each note 
 def one_hot_encode(y: np.ndarray, voices: np.ndarray) -> np.ndarray:
     # unique set of notes in the voice
-    unique_notes = np.unique(voices)
+    unique_voice1 = np.unique(voices[:,0])
+    unique_voice2 = np.unique(voices[:,1])
+    unique_voice3 = np.unique(voices[:,2])
+    unique_voice4 = np.unique(voices[:,3])
+    total = len(unique_voice1) + len(unique_voice2) + len(unique_voice3) + len(unique_voice4)
 
     # initialize return array
-    encoded = np.zeros((y.shape[0], y.shape[1] * len(unique_notes)), dtype=np.float32)
+    encoded = np.zeros((y.shape[0], total), dtype=np.float32)
     
     # one hot encode each note
     for timestep, notes in enumerate(y):
         for voice, note in enumerate(notes):
-            one_hot_location = np.nonzero(unique_notes == note)[0][0]
-            encoded[timestep][one_hot_location + voice * len(unique_notes)] = 1 
+            if (voice == 0):
+                one_hot_location = np.nonzero(unique_voice1 == note)[0][0]
+                encoded[timestep][one_hot_location] = 1
+            elif (voice == 1):
+                one_hot_location = np.nonzero(unique_voice2 == note)[0][0]
+                encoded[timestep][one_hot_location + len(unique_voice1)] = 1
+            elif (voice == 2):
+                one_hot_location = np.nonzero(unique_voice3 == note)[0][0]
+                encoded[timestep][one_hot_location + len(unique_voice1) + len(unique_voice2)] = 1
+            elif (voice == 3):
+                one_hot_location = np.nonzero(unique_voice4 == note)[0][0]
+                encoded[timestep][one_hot_location + len(unique_voice1) + len(unique_voice2) + len(unique_voice3)] = 1
 
     return encoded
 
@@ -46,8 +60,8 @@ class NotesDataset(Dataset):
         # initialize x data -> window_size amount of notes of 4 voices each per prediction
         self.x = np.zeros((self.nr_samples, window_size, self.nr_voices), dtype=np.float32)
         for i in range(self.x.shape[0]):
-            self.x[i] = voices[i : i + window_size]
-            # self.x[i] = scaled_voices[i : i + window_size]
+            # self.x[i] = voices[i : i + window_size]
+            self.x[i] = scaled_voices[i : i + window_size]
 
         # initialize y data -> 4 following target notes per time window 
         self.y = np.zeros((self.nr_samples, self.nr_voices), dtype = np.float32)
@@ -77,7 +91,7 @@ class LSTM_model(nn.Module):
         self.num_layers = num_layers
 
         kernel_conv2 = 2
-        c_out = 32
+        c_out = 16
         lstm_input_size = (input_size - (kernel_conv2 - 1))
 
         # first conv layer
@@ -123,7 +137,7 @@ class LSTM_model(nn.Module):
         else:
             hn = torch.zeros(self.num_layers,  1, self.hidden_size)
             cn = torch.zeros(self.num_layers, 1, self.hidden_size)
-            out, (hn, cn) = lstm(out, (hn, cn)) 
+            out, (hn, cn) = self.lstm(out, (hn, cn)) 
             out = self.linear(out[:,-1,:])
 
         return out
@@ -144,7 +158,7 @@ def training(model, train_loader:DataLoader, test_loader:DataLoader, nr_epochs, 
             # reset gradient function of weights
             optimizer.zero_grad()
             # forward
-            prediction = model(inputs)
+            prediction = model(inputs, stateful)
             # calculate loss
             loss = loss_func(prediction, labels)
             # backward, retain_graph = True needed for hidden lstm states
@@ -160,7 +174,7 @@ def training(model, train_loader:DataLoader, test_loader:DataLoader, nr_epochs, 
         with torch.no_grad():
             for j, (inputs, labels) in enumerate(test_loader):
                 # forward pass
-                prediction = model(inputs)
+                prediction = model(inputs, stateful)
                 # calculate loss
                 test_loss = loss_func(prediction, labels)
 
@@ -185,10 +199,11 @@ def createTrainTestDataloaders(dataset:NotesDataset, split_size, batch_size, shu
     dataset_size = len(dataset)
     indices = list(range(dataset_size))
     split = int(np.floor((1 - split_size) * dataset_size))
-    
+
     if shuffle:
         np.random.shuffle(indices)
-    train_indices, test_indices = indices[split:], indices[:split]
+    train_indices, test_indices = indices[:split], indices[split:]
+    # train_indices, test_indices = indices[split:], indices[:split]
 
     train_sampler = SubsetRandomSampler(train_indices)
     test_sampler = SubsetRandomSampler(test_indices)
@@ -211,17 +226,17 @@ def main():
     # remove starting silence, does not promote learning
     # data shape is (3816, 4) after
     voices = np.delete(voices, slice(8), axis=0)
-    print(voices.shape)
+    print("Data shape (4 voices):", voices.shape)
 
     # Sliding window size used as input in model
-    window_size = 48
+    window_size = 40
 
     # create dataset based on window size where one window of timesteps
     #   will predict the subsequential single timestep
     dataset = NotesDataset(window_size, voices)
 
     # create data loaders for test and train
-    split_size = 0.2
+    split_size = 0.1
     batch_size = 1
     train_loader, test_loader = createTrainTestDataloaders(dataset, split_size, batch_size,shuffle=False, scale=True)
     
@@ -230,12 +245,14 @@ def main():
           "- Output size:", labels.size(), 
           "- Samples:", len(train_loader), 
           "- TEST samples:", len(test_loader))
+    print(features)
+    print(labels)
 
     # create model, nr_layers = number of sequential LSTM layers
     # input size = number of expected features
     # hidden size = number of features in hidden state 
-    hidden_size = 46
-    nr_layers = 2
+    hidden_size = 16
+    nr_layers = 1
     input_size = voices.shape[1]
     output_size = labels.size(1)
     lstm_model = LSTM_model(input_size, output_size, hidden_size, nr_layers, batch_size)
