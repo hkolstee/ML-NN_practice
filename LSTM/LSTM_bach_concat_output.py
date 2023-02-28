@@ -8,8 +8,8 @@ import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader, Subset
 from torch.utils.data.sampler import SubsetRandomSampler
 
-from torch.utils.tensorboard import SummaryWriter
-writer = SummaryWriter()
+# from torch.utils.tensorboard import SummaryWriter
+# writer = SummaryWriter()
 
 from sklearn.preprocessing import StandardScaler
 
@@ -30,8 +30,12 @@ def one_hot_encode(y: np.ndarray, voices: np.ndarray) -> np.ndarray:
     # one hot encode each note
     for timestep, notes in enumerate(y):
         for voice, note in enumerate(notes):
+            print(voice, note)
+            print(unique_voice1)
+            # math.isclose for standard scaled floats
             if (voice == 0):
-                one_hot_location = np.nonzero(unique_voice1 == note)[0][0]
+                # get location in uniques of current note
+                one_hot_location = np.nonzero(math.isclose(unique_voice1, note, abs_tol = 0.001))[0][0]
                 encoded[timestep][one_hot_location] = 1
             elif (voice == 1):
                 one_hot_location = np.nonzero(unique_voice2 == note)[0][0]
@@ -45,31 +49,26 @@ def one_hot_encode(y: np.ndarray, voices: np.ndarray) -> np.ndarray:
 
     return encoded
 
+# set_voices and all_voices used when creating a subset of all data for the current dataset (train/test)
+# necessary for one-hot encoding of test data
 class NotesDataset(Dataset):
-    def __init__(self, window_size: int, voices: np.ndarray):
+    def __init__(self, window_size: int, subset_voices:np.ndarray, all_voices: np.ndarray):
         # nr of samples, and nr of voices
-        self.nr_samples = voices.shape[0] - window_size
-        self.nr_voices = voices.shape[1]
-
-        # scale x (-> time information leak here but for now whatever)
-        #   ofc for now also train info leak into test by scaling here
-        scaler = StandardScaler()
-        scaler.fit(voices)
-        scaled_voices = scaler.transform(voices)
+        self.nr_samples = subset_voices.shape[0] - window_size
+        self.nr_voices = subset_voices.shape[1]
 
         # initialize x data -> window_size amount of notes of 4 voices each per prediction
         self.x = np.zeros((self.nr_samples, window_size, self.nr_voices), dtype=np.float32)
         for i in range(self.x.shape[0]):
-            # self.x[i] = voices[i : i + window_size]
-            self.x[i] = scaled_voices[i : i + window_size]
+            self.x[i] = subset_voices[i : i + window_size]
 
         # initialize y data -> 4 following target notes per time window 
         self.y = np.zeros((self.nr_samples, self.nr_voices), dtype = np.float32)
         for j in range(self.y.shape[0]):
-            self.y[j] = voices[j + window_size]
+            self.y[j] = subset_voices[j + window_size]
 
         # one hot encode target tensor
-        self.y = one_hot_encode(self.y, voices)
+        self.y = one_hot_encode(self.y, all_voices)
 
         # create tensors
         self.x = torch.from_numpy(self.x)
@@ -185,37 +184,44 @@ def training(model, train_loader:DataLoader, test_loader:DataLoader, nr_epochs, 
         # print training running loss and add to tensorboard
         print("Epoch:", epoch, "  Train loss:", running_loss_train/len(train_loader),
                                 ", Test loss:", running_loss_test/len(test_loader))
-        writer.add_scalar("Running train loss", running_loss_train/len(train_loader), epoch)
-        writer.add_scalar("Running test loss", running_loss_test/len(test_loader), epoch)
+        # writer.add_scalar("Running train loss", running_loss_train/len(train_loader), epoch)
+        # writer.add_scalar("Running test loss", running_loss_test/len(test_loader), epoch)
         running_loss_train = 0
         running_loss_test = 0
 
 
     # tb writer flush
-    writer.flush()
+    # writer.flush()
 
-def createTrainTestDataloaders(dataset:NotesDataset, split_size, batch_size, shuffle, scale):
+# create train and test dataset based on window size where one window of timesteps
+#   will predict the subsequential single timestep
+def createTrainTestDataloaders(voices, split_size, window_size, batch_size):
     # Train/test split
-    dataset_size = len(dataset)
+    dataset_size = len(voices[:,])
     indices = list(range(dataset_size))
     split = int(np.floor((1 - split_size) * dataset_size))
-
-    if shuffle:
-        np.random.shuffle(indices)
     train_indices, test_indices = indices[:split], indices[split:]
-    # train_indices, test_indices = indices[split:], indices[:split]
 
-    train_sampler = SubsetRandomSampler(train_indices)
-    test_sampler = SubsetRandomSampler(test_indices)
+    # create split in data
+    train_voices = voices[train_indices, :]
+    test_voices = voices[test_indices, :]
+    
+    # scale both sets, using training data as fit (no leaks)
+    scaler = StandardScaler()
+    scaler.fit(train_voices)
+    train_voices = scaler.transform(train_voices)
+    test_voices = scaler.transform(test_voices)
+    all_voices = scaler.transform(voices)
+    print(train_voices[-10:,:])
+    print(test_voices[:10,:])
+    
+    # create datasets
+    train_dataset = NotesDataset(window_size, train_voices, all_voices)
+    test_dataset = NotesDataset(window_size, test_voices, all_voices)
 
     # create dataloaders
-    train_loader = DataLoader(dataset, sampler=train_sampler, batch_size=batch_size, num_workers=2)
-    test_loader = DataLoader(dataset, sampler=test_sampler, batch_size=batch_size, num_workers=2)
-
-    # if scale:
-    #     scaler = StandardScaler()
-    #     scaler.fit(train_loader.dataset.x)
-    #     train_loader.dataset.x = scaler.transform(train_loader.dataset.x)
+    train_loader = DataLoader(train_dataset, batch_size)
+    test_loader = DataLoader(test_dataset, batch_size)
     
     return train_loader, test_loader
 
@@ -230,15 +236,13 @@ def main():
 
     # Sliding window size used as input in model
     window_size = 40
-
-    # create dataset based on window size where one window of timesteps
-    #   will predict the subsequential single timestep
-    dataset = NotesDataset(window_size, voices)
-
-    # create data loaders for test and train
-    split_size = 0.1
+    
+    # batch_size for training network
     batch_size = 1
-    train_loader, test_loader = createTrainTestDataloaders(dataset, split_size, batch_size,shuffle=False, scale=True)
+    
+    # split, scale, create datasets, and then make dataloaders
+    split_size = 0.1
+    train_loader, test_loader = createTrainTestDataloaders(voices, split_size, window_size, batch_size)
     
     features, labels = next(iter(train_loader))
     print("TRAIN: input size:", features.size(), 
