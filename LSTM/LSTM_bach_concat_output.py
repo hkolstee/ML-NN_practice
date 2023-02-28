@@ -15,6 +15,14 @@ from sklearn.preprocessing import StandardScaler
 
 from tqdm import tqdm
 
+# to find float index in unique float list of standardized array
+# works also for ints when not standardized
+def uniqueLocation(uniques, note):
+    for index, unique in enumerate(uniques):
+        if (math.isclose(unique, note, abs_tol=0.0001)):
+            return index
+    return None
+
 # returns concatenated onehot encoding for each note 
 def one_hot_encode(y: np.ndarray, voices: np.ndarray) -> np.ndarray:
     # unique set of notes in the voice
@@ -30,21 +38,19 @@ def one_hot_encode(y: np.ndarray, voices: np.ndarray) -> np.ndarray:
     # one hot encode each note
     for timestep, notes in enumerate(y):
         for voice, note in enumerate(notes):
-            print(voice, note)
-            print(unique_voice1)
             # math.isclose for standard scaled floats
             if (voice == 0):
                 # get location in uniques of current note
-                one_hot_location = np.nonzero(math.isclose(unique_voice1, note, abs_tol = 0.001))[0][0]
+                one_hot_location = uniqueLocation(unique_voice1, note)
                 encoded[timestep][one_hot_location] = 1
             elif (voice == 1):
-                one_hot_location = np.nonzero(unique_voice2 == note)[0][0]
+                one_hot_location = uniqueLocation(unique_voice2, note)
                 encoded[timestep][one_hot_location + len(unique_voice1)] = 1
             elif (voice == 2):
-                one_hot_location = np.nonzero(unique_voice3 == note)[0][0]
+                one_hot_location = uniqueLocation(unique_voice3, note)
                 encoded[timestep][one_hot_location + len(unique_voice1) + len(unique_voice2)] = 1
             elif (voice == 3):
-                one_hot_location = np.nonzero(unique_voice4 == note)[0][0]
+                one_hot_location = uniqueLocation(unique_voice4, note)
                 encoded[timestep][one_hot_location + len(unique_voice1) + len(unique_voice2) + len(unique_voice3)] = 1
 
     return encoded
@@ -195,6 +201,7 @@ def training(model, train_loader:DataLoader, test_loader:DataLoader, nr_epochs, 
 
 # create train and test dataset based on window size where one window of timesteps
 #   will predict the subsequential single timestep
+# Data is created without any information leak between test/train (either scaling leak or time leak)
 def createTrainTestDataloaders(voices, split_size, window_size, batch_size):
     # Train/test split
     dataset_size = len(voices[:,])
@@ -212,8 +219,6 @@ def createTrainTestDataloaders(voices, split_size, window_size, batch_size):
     train_voices = scaler.transform(train_voices)
     test_voices = scaler.transform(test_voices)
     all_voices = scaler.transform(voices)
-    print(train_voices[-10:,:])
-    print(test_voices[:10,:])
     
     # create datasets
     train_dataset = NotesDataset(window_size, train_voices, all_voices)
@@ -244,13 +249,14 @@ def main():
     split_size = 0.1
     train_loader, test_loader = createTrainTestDataloaders(voices, split_size, window_size, batch_size)
     
+    # Some informational print statements
     features, labels = next(iter(train_loader))
     print("TRAIN: input size:", features.size(), 
           "- Output size:", labels.size(), 
           "- Samples:", len(train_loader), 
           "- TEST samples:", len(test_loader))
-    print(features)
-    print(labels)
+    # print(features)
+    # print(labels)
 
     # create model, nr_layers = number of sequential LSTM layers
     # input size = number of expected features
@@ -273,7 +279,7 @@ def main():
 
 if __name__ == '__main__':
     np.set_printoptions(threshold=sys.maxsize)
-    np.set_printoptions(precision=2)
+    np.set_printoptions(precision=4)
     np.set_printoptions(suppress=True,linewidth=np.nan)
 
     main()

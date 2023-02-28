@@ -81,7 +81,7 @@ class FeedForwardNN:
         try:
             w_topology = [input_size] + hidden_units + [output_size]
         except TypeError:
-            raise TypeError("hidden_units should be a list or array in the size of nr_layers") from None
+            raise TypeError("hidden_units should be a list or array in the shape of (nr_layers,)") from None
         
         return w_topology
 
@@ -136,7 +136,7 @@ class FeedForwardNN:
 
 
 nn = FeedForwardNN(input_size = 5, output_size = 1, 
-                   nr_layers = 3, hidden_units = [12, 8, 6], 
+                   nr_layers = 2, hidden_units = [5, 5], 
                    activation = "tanh")
 weights = nn.weights()
 print(len(weights))
