@@ -1,9 +1,5 @@
 import numpy as np
 
-# help functions
-def array_map(x, function):
-    return np.array(list(map(function, x)))
-
 # activiation functions and their derivatives
 def tanh(x):
     return np.tanh(x)
@@ -46,7 +42,7 @@ def softmax_deriv(x):
     
 
 # loss functions
-#   mean squared error
+#   TODO: mean squared error
 def MSELoss(output, target):
     pass
 
@@ -58,9 +54,14 @@ def BCELoss_deriv(output, target):
     return (-target / output) + ((1 - target) / (1 - output))
 
 
-# simple feed forward network with multiple layers given with nr_layers, hidden_units
-#                                                       where nr_layers = len(hidden_units)
-# last layer -> output is linear activation
+# simple feed forward network with multiple layers
+# parameters:
+#   input_size: The dimensionality of an input sample
+#   output_size: The dimensionality of the network output
+#   nr_layers: Number of hidden layers
+#   hidden_units: The size of the hidden layers (a list of sizes, one size for each hidden layer)
+#   activation: The activation function used in the hidden layers
+#   output_activation: The acctivation used in the last hidden to output layer
 class FeedForwardNN:
     def __init__(self, input_size:int, output_size:int, 
                     nr_layers:int, hidden_units:list, 
@@ -97,13 +98,13 @@ class FeedForwardNN:
         # set activation function
         if (activ_func == "tanh"):
             self.activ_func = tanh
-            self.activ_d_func = tanh_deriv
+            self.activ_func_deriv = tanh_deriv
         elif (activ_func == "sigmoid"):
             self.activ_func = sigmoid
-            self.activ_d_func = sigmoid_deriv
+            self.activ_func_deriv = sigmoid_deriv
         elif (activ_func == "relu"):
             self.activ_func = relu
-            self.activ_d_func = relu_deriv
+            self.activ_func_deriv = relu_deriv
         else:
             raise KeyError("Only activation functions available: \"tanh\", \"sigmoid\", \"relu\"")
         
@@ -111,13 +112,13 @@ class FeedForwardNN:
         # set output activation function
         if (out_activ_func == "sigmoid"):
             self.out_activ_func = sigmoid
-            self.out_activ_d_func = sigmoid_deriv
+            self.out_activ_func_deriv = sigmoid_deriv
         elif (out_activ_func == "linear"):
             self.out_activ_func = linear
-            self.out_activ_d_func = linear
+            self.out_activ_func_deriv = linear
         elif (out_activ_func == "softmax"):
             self.out_activ_func = softmax
-            self.out_activ_d_func = softmax_deriv
+            self.out_activ_func_deriv = softmax_deriv
         else:
             raise KeyError("Only activation functions available: \"linear\", \"sigmoid\", \"softmax\"")
 
@@ -141,7 +142,6 @@ class FeedForwardNN:
             current_to_next = np.random.uniform(low = -(1/np.sqrt(w_topology[i])), 
                                                 high = (1/np.sqrt(w_topology[i])), 
                                                 size = (w_topology[i+1], w_topology[i]))
-
             # append to list
             self.layers_weights.append(current_to_next)
 
@@ -170,44 +170,40 @@ class FeedForwardNN:
     
     # backpropagation over network (SGD)
     def backprop(self, input, output, target, loss_function, lr):
+        # check loss function
+        if (loss_function == "BCELoss"):
+            loss_func = BCELoss
+            loss_func_deriv = BCELoss_deriv
+        else:
+            raise KeyError("Only loss functions available: \"BCELoss\", \"MSELoss\"")
+
         # initialize gradients of weights
         gradients = []
         for i, weights in enumerate(self.layers_weights):
             gradients.append(np.zeros(weights.shape))
 
-        # output layer gradients (either sigmoid, linear, or softmax).
-        #   np.vectorize(function)(array) works as map(function, array) function
+        # first output layer gradients (either sigmoid, linear, or softmax).
         #   calculates: gradient = dLoss/dWeight = dLoss/dActiv_value * dActiv_value/dWsum * dWsum/dWeight
         #       as can be concluded from chainrule
         #       where: delta = dLoss/dActiv_value * dActiv_value/dWsum
-        #       for use in gradient calculation of deeper layers
+        #           for use in gradient calculation of deeper layers
         # more info on inner workings: towardsdatascience.com -> understanding backpropagation
-        delta = BCELoss_deriv(output, target) * np.vectorize(self.out_activ_d_func)(self.weighted_sums[-1])
-        gradients[-1] = delta * self.activ_vals[-1]
+        #   np.vectorize(function)(array) works as map(function, array) function
+        delta = loss_func_deriv(output, target) * np.vectorize(self.out_activ_func_deriv)(self.weighted_sums[-1])
+        gradients[-1] = delta * self.activ_vals[-1]    
         # rest of network weight gradients 
         # this is calculated by: gradient = dot(delta^T, dWsum/dActiv_value) * dActiv_value/dWsum * dWsum/dWeights
         for i in reversed(range(len(gradients) - 1)):
-            # print(i)
-            # print("d", delta)
-            # print("w", np.squeeze(self.layers_weights[i+1]))
-            # print("dot:", np.dot(delta, np.squeeze(self.layers_weights[i+1])) )
+            # reached end -> need to use input as activation values
             if (i == 0):
-                delta = np.dot(delta, np.squeeze(self.layers_weights[i+1])) * np.vectorize(self.activ_d_func)(self.weighted_sums[i])
-                print("d:", delta)
-                print("w:", np.squeeze(self.layers_weights[i+1]))
-                print("input:", input)
-                print("stacked:", np.tile(input, (len(delta), 1)))
-                gradients[i] = delta * np.tile(input, (len(delta), 1))
+                delta = np.dot(delta, np.squeeze(self.layers_weights[i+1])) * np.vectorize(self.activ_func_deriv)(self.weighted_sums[i])
+                gradients[i] = np.array([input * error for error in delta])
+            # somewhere within hidden layer weights
             else:
-                delta = np.dot(delta, np.squeeze(self.layers_weights[i+1])) * np.vectorize(self.activ_d_func)(self.weighted_sums[i])
-                gradients[i] =  delta * [self.activ_vals[i], self.activ_vals[i]]
+                delta = np.dot(delta, np.squeeze(self.layers_weights[i+1])) * np.vectorize(self.activ_func_deriv)(self.weighted_sums[i])
+                gradients[i] = np.array([self.activ_vals[i-1] * error for error in delta])
 
-        # print("wghts:", self.layers_weights)
-        # print("activ:", self.activ_vals)
-        # print("wsums:", self.weighted_sums)
-        # print("grads:", gradients)
-        
-        # change weights based on negative gradient and learning rate
+        # change weights based on negative gradient times learning rate
         for i in range(len(self.layers_weights)):
             self.layers_weights[i] = self.layers_weights[i] - lr * gradients[i]
 
@@ -215,26 +211,26 @@ class FeedForwardNN:
     def weights(self):
         return self.layers_weights
 
-nn = FeedForwardNN(input_size = 2, output_size = 1, 
-                   nr_layers = 3, hidden_units = [5, 5, 5], 
-                   activation = "tanh", output_activation="sigmoid")
+# nn = FeedForwardNN(input_size = 2, output_size = 1, 
+#                    nr_layers = 3, hidden_units = [8, 6, 3], 
+#                    activation = "tanh", output_activation="sigmoid")
 
-weights = nn.weights()
-print(len(weights))
-for i in range(len(weights)):
-    print(weights[i].shape)
+# weights = nn.weights()
+# print(len(weights))
+# for i in range(len(weights)):
+    # print(weights[i].shape)
     # print(weights[i])
 
-input = np.random.rand(2)
-print("\ninput", input)
-output = nn.forward(input)
-print("output", output)
-loss_before = BCELoss(output[0], 1)
-print("loss:", loss_before)
-# print("before:", nn.weights())
-nn.backprop(input, output[0], 1, "loss funct here i guess", 0.01)
-output = nn.forward(input)
-print("ouput after backprop:", output)
-loss_after = BCELoss(output[0], 1)
-print("loss after backprop:", loss_after)
-print("change in loss:", loss_after - loss_before)
+# input = np.random.rand(2)
+# print("\ninput", input)
+# output = nn.forward(input)
+# print("output", output)
+# loss_before = BCELoss(output[0], 1)
+# print("loss:", loss_before)
+# # print("before:", nn.weights())
+# nn.backprop(input, output[0], 1, "BCELoss", 0.01)
+# output = nn.forward(input)
+# print("ouput after backprop:", output)
+# loss_after = BCELoss(output[0], 1)
+# print("loss after backprop:", loss_after)
+# print("change in loss:", loss_after - loss_before)
