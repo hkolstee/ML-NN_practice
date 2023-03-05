@@ -164,7 +164,7 @@ class FeedForwardNN:
                 self.activ_vals[i] = np.vectorize(self.activ_func)(self.weighted_sums[i])
 
         # last layer to output
-        out = [self.out_activ_func(np.dot(out, node_weights)) for node_weights in self.layers_weights[-1]]
+        out = [self.out_activ_func(np.dot(self.activ_vals[-1], node_weights)) for node_weights in self.layers_weights[-1]]
 
         return out
     
@@ -193,7 +193,11 @@ class FeedForwardNN:
             # print("dot:", np.dot(delta, np.squeeze(self.layers_weights[i+1])) )
             if (i == 0):
                 delta = np.dot(delta, np.squeeze(self.layers_weights[i+1])) * np.vectorize(self.activ_d_func)(self.weighted_sums[i])
-                gradients[i] = delta * [input, input]
+                print("d:", delta)
+                print("w:", np.squeeze(self.layers_weights[i+1]))
+                print("input:", input)
+                print("stacked:", np.tile(input, (len(delta), 1)))
+                gradients[i] = delta * np.tile(input, (len(delta), 1))
             else:
                 delta = np.dot(delta, np.squeeze(self.layers_weights[i+1])) * np.vectorize(self.activ_d_func)(self.weighted_sums[i])
                 gradients[i] =  delta * [self.activ_vals[i], self.activ_vals[i]]
@@ -212,7 +216,7 @@ class FeedForwardNN:
         return self.layers_weights
 
 nn = FeedForwardNN(input_size = 2, output_size = 1, 
-                   nr_layers = 3, hidden_units = [2, 2, 2], 
+                   nr_layers = 3, hidden_units = [5, 5, 5], 
                    activation = "tanh", output_activation="sigmoid")
 
 weights = nn.weights()
