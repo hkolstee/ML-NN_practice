@@ -1,5 +1,9 @@
 import numpy as np
 
+# help functions
+def array_map(x, function):
+    return np.array(list(map(function, x)))
+
 # activiation functions and their derivatives
 def tanh(x):
     return np.tanh(x)
@@ -66,10 +70,12 @@ class FeedForwardNN:
         self.nr_layers = nr_layers
         self.hidden_units = hidden_units
 
-        # initialize the activations for use in backprop
-        self.hidden_activ_vals = []
+        # initialize the weighted sums and activations for use in backprop
+        self.activ_vals = []
+        self.weighted_sums = []
         for i, nr_neurons in enumerate(hidden_units):
-            self.hidden_activ_vals.append(np.zeros(nr_neurons))
+            self.activ_vals.append(np.zeros(nr_neurons))
+            self.weighted_sums.append(np.zeros(nr_neurons))
 
         # check if nr of layers is equal to nr of hidden_units sizes given in hidden_units array
         if (nr_layers != len(hidden_units)):
@@ -81,6 +87,7 @@ class FeedForwardNN:
 
         # create topology of weights: input -> layers -> output
         w_topology = self.__createTopology(input_size, hidden_units, output_size)
+        # print("wtopo:", w_topology)
 
         # initialize weights
         self.__initWeights(nr_layers, w_topology)
@@ -144,65 +151,86 @@ class FeedForwardNN:
         if (len(input) != self.input_size):
             raise IndexError("Size of input ({}) and network input size ({}) are not equal.".format(len(input), self.input_size))
         
-        # forward through the network (activation func on the weighted sum for each neuron in layer)
+        # forward through the network (activation func on the weighted sum for each neuron in layer).
+        #   The weighted sums and activation values are saved in list of matrices to be used in backprop.
+        #   TODO: Can be implemented to only do this when training network.
         out = input
         for i, weights in enumerate(self.layers_weights[:-1]):
             if (i == 0):
-                self.hidden_activ_vals[i] = [self.activ_func(np.dot(out, node_weights)) for node_weights in weights]
+                self.weighted_sums[i] = np.array([np.dot(out, node_weights) for node_weights in weights])
+                self.activ_vals[i] = np.vectorize(self.activ_func)(self.weighted_sums[i])
             else:
-                self.hidden_activ_vals[i] = [self.activ_func(np.dot(self.hidden_activ_vals[i-1], node_weights)) for node_weights in weights]
-        
+                self.weighted_sums[i] = np.array([self.activ_func(np.dot(self.activ_vals[i-1], node_weights)) for node_weights in weights])
+                self.activ_vals[i] = np.vectorize(self.activ_func)(self.weighted_sums[i])
+
         # last layer to output
         out = [self.out_activ_func(np.dot(out, node_weights)) for node_weights in self.layers_weights[-1]]
 
         return out
     
     # backpropagation over network (SGD)
-    def backprop(self, output, target, loss_function, lr):
-        # forward pass
-        # output = self.forward(input)
-
-
+    def backprop(self, input, output, target, loss_function, lr):
         # initialize gradients of weights
         gradients = []
         for i, weights in enumerate(self.layers_weights):
             gradients.append(np.zeros(weights.shape))
-            print(weights.shape)
 
-        # print(gradients[-1][0])
+        # output layer gradients (either sigmoid, linear, or softmax).
+        #   np.vectorize(function)(array) works as map(function, array) function
+        #   calculates: gradient = dLoss/dWeight = dLoss/dActiv_value * dActiv_value/dWsum * dWsum/dWeight
+        #       as can be concluded from chainrule
+        #       where: delta = dLoss/dActiv_value * dActiv_value/dWsum
+        #       for use in gradient calculation of deeper layers
+        # more info on inner workings: towardsdatascience.com -> understanding backpropagation
+        delta = BCELoss_deriv(output, target) * np.vectorize(self.out_activ_d_func)(self.weighted_sums[-1])
+        gradients[-1] = delta * self.activ_vals[-1]
+        # rest of network weight gradients 
+        # this is calculated by: gradient = dot(delta^T, dWsum/dActiv_value) * dActiv_value/dWsum * dWsum/dWeights
+        for i in reversed(range(len(gradients) - 1)):
+            # print(i)
+            # print("d", delta)
+            # print("w", np.squeeze(self.layers_weights[i+1]))
+            # print("dot:", np.dot(delta, np.squeeze(self.layers_weights[i+1])) )
+            if (i == 0):
+                delta = np.dot(delta, np.squeeze(self.layers_weights[i+1])) * np.vectorize(self.activ_d_func)(self.weighted_sums[i])
+                gradients[i] = delta * [input, input]
+            else:
+                delta = np.dot(delta, np.squeeze(self.layers_weights[i+1])) * np.vectorize(self.activ_d_func)(self.weighted_sums[i])
+                gradients[i] =  delta * [self.activ_vals[i], self.activ_vals[i]]
 
-        # print(self.hidden_activ_vals[-1])
-        # print(self.out_activ_d_func(output))
-        # print("loss:", output, "to", target, "=", BCELoss_deriv(output, target))
-
-        # output layer (either sigmoid, linear, or softmax)
-        gradients[-1][0] = [BCELoss_deriv(output, target) * self.out_activ_d_func(output) * a for a in self.hidden_activ_vals[-1]]
+        # print("wghts:", self.layers_weights)
+        # print("activ:", self.activ_vals)
+        # print("wsums:", self.weighted_sums)
+        # print("grads:", gradients)
         
-        print(self.hidden_activ_vals)
-        print(gradients)
-        # print(self.layers_weights)
-
-        for i in reversed(range(len(self.layers_weights) - 1)):
-            for j in range(len(self.layers_weights[i])):
-                gradients[i][j] = [gradients[i+1][j] * self.activ_d_func(self.hidden_activ_vals[i])] 
+        # change weights based on negative gradient and learning rate
+        for i in range(len(self.layers_weights)):
+            self.layers_weights[i] = self.layers_weights[i] - lr * gradients[i]
 
     # get weights 
     def weights(self):
         return self.layers_weights
 
-
-
-nn = FeedForwardNN(input_size = 5, output_size = 1, 
-                   nr_layers = 2, hidden_units = [5, 5], 
+nn = FeedForwardNN(input_size = 2, output_size = 1, 
+                   nr_layers = 3, hidden_units = [2, 2, 2], 
                    activation = "tanh", output_activation="sigmoid")
+
 weights = nn.weights()
 print(len(weights))
 for i in range(len(weights)):
     print(weights[i].shape)
-    print(weights[i])
+    # print(weights[i])
 
-input = np.random.rand(5)
+input = np.random.rand(2)
 print("\ninput", input)
 output = nn.forward(input)
 print("output", output)
-nn.backprop(output[0], 1, "loss funct here i guess", 0.01)
+loss_before = BCELoss(output[0], 1)
+print("loss:", loss_before)
+# print("before:", nn.weights())
+nn.backprop(input, output[0], 1, "loss funct here i guess", 0.01)
+output = nn.forward(input)
+print("ouput after backprop:", output)
+loss_after = BCELoss(output[0], 1)
+print("loss after backprop:", loss_after)
+print("change in loss:", loss_after - loss_before)
