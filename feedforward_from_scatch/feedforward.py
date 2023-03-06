@@ -13,6 +13,7 @@ def sigmoid(x):
 def sigmoid_deriv(x):
     # prevent overflow
     x = np.clip(x, -500, 500)
+    # derivative is
     return (sigmoid(x) * (1 - sigmoid(x)))
 
 def relu(x):
@@ -94,6 +95,9 @@ class FeedForwardNN:
 
         # initialize weights
         self.__initWeights(nr_layers, w_topology)
+        
+        # set gradients to 0
+        self.__initGradients()
 
     # set activation functions and its derivative to call in the forward and backprop function
     def __setActivFunc(self, activ_func):
@@ -147,6 +151,12 @@ class FeedForwardNN:
             # append to list
             self.layers_weights.append(current_to_next)
 
+    # initialize gradients to 0
+    def __initGradients(self):
+        self.gradients = []
+        for i, weights in enumerate(self.layers_weights):
+            self.gradients.append(np.zeros(weights.shape))
+
     # forward through the model
     def forward(self, input):
         # check input size
@@ -179,11 +189,6 @@ class FeedForwardNN:
         else:
             raise KeyError("Only loss functions available: \"BCELoss\", \"MSELoss\"")
 
-        # initialize gradients of weights
-        gradients = []
-        for i, weights in enumerate(self.layers_weights):
-            gradients.append(np.zeros(weights.shape))
-
         # first output layer gradients (either sigmoid, linear, or softmax).
         #   calculates: gradient = dLoss/dWeight = dLoss/dActiv_value * dActiv_value/dWsum * dWsum/dWeight
         #       as can be concluded from chainrule
@@ -205,7 +210,7 @@ class FeedForwardNN:
                 delta = np.dot(delta, np.squeeze(self.layers_weights[i+1])) * np.vectorize(self.activ_func_deriv)(self.weighted_sums[i])
                 gradients[i] = np.array([self.activ_vals[i-1] * error for error in delta])
 
-        # change weights based on negative gradient times learning rate
+        # change weights based on negative gradient times learning rate (SGD)
         for i in range(len(self.layers_weights)):
             self.layers_weights[i] = self.layers_weights[i] - lr * gradients[i]
 
