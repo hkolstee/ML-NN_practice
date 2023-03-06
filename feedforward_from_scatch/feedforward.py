@@ -11,6 +11,8 @@ def sigmoid(x):
     return (1 / (1 + np.exp(-x)))
 
 def sigmoid_deriv(x):
+    # prevent overflow
+    x = np.clip(x, -500, 500)
     return (sigmoid(x) * (1 - sigmoid(x)))
 
 def relu(x):
@@ -210,27 +212,3 @@ class FeedForwardNN:
     # get weights 
     def weights(self):
         return self.layers_weights
-
-# nn = FeedForwardNN(input_size = 2, output_size = 1, 
-#                    nr_layers = 3, hidden_units = [8, 6, 3], 
-#                    activation = "tanh", output_activation="sigmoid")
-
-# weights = nn.weights()
-# print(len(weights))
-# for i in range(len(weights)):
-    # print(weights[i].shape)
-    # print(weights[i])
-
-# input = np.random.rand(2)
-# print("\ninput", input)
-# output = nn.forward(input)
-# print("output", output)
-# loss_before = BCELoss(output[0], 1)
-# print("loss:", loss_before)
-# # print("before:", nn.weights())
-# nn.backprop(input, output[0], 1, "BCELoss", 0.01)
-# output = nn.forward(input)
-# print("ouput after backprop:", output)
-# loss_after = BCELoss(output[0], 1)
-# print("loss after backprop:", loss_after)
-# print("change in loss:", loss_after - loss_before)

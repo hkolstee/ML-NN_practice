@@ -8,7 +8,7 @@ def createData(nr_class1, nr_class2):
     
     # angle, radius
     alpha = np.random.uniform(low = 0, high = 2 * np.pi, size = (nr_class1,))
-    radius = np.random.uniform(low = inner_radius, high = outer_radius, size = (nr_class1,))
+    radius = np.random.uniform(low = inner_radius * 1.2, high = outer_radius, size = (nr_class1,))
     
     # create class 1 (outer ring)
     class1_x = radius * np.cos(alpha)
@@ -16,7 +16,7 @@ def createData(nr_class1, nr_class2):
     
     # new random angles and radius for class 2
     alpha = np.random.uniform(low = 0, high = 2 * np.pi, size = (nr_class2,))
-    radius = np.random.uniform(low = 0, high = inner_radius, size = (nr_class2,))
+    radius = np.random.uniform(low = 0, high = inner_radius * 0.8, size = (nr_class2,))
     
     # create class 2 (inner circle)
     class2_x = radius * np.cos(alpha)
