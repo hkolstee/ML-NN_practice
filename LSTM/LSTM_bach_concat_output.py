@@ -8,12 +8,15 @@ import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader, Subset
 from torch.utils.data.sampler import SubsetRandomSampler
 
-# from torch.utils.tensorboard import SummaryWriter
-# writer = SummaryWriter()
+from torch.utils.tensorboard import SummaryWriter
+writer = SummaryWriter()
 
 from sklearn.preprocessing import StandardScaler
 
 from tqdm import tqdm
+
+# gpu if available (global variable for convenience)
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 # to find float index in unique float list of standardized array
 # works also for ints when not standardized
@@ -77,8 +80,8 @@ class NotesDataset(Dataset):
         self.y = one_hot_encode(self.y, all_voices)
 
         # create tensors
-        self.x = torch.from_numpy(self.x)
-        self.y = torch.from_numpy(self.y)
+        self.x = torch.from_numpy(self.x).to(device)
+        self.y = torch.from_numpy(self.y).to(device)
 
     def __getitem__(self, index: int):
         return self.x[index], self.y[index]
@@ -96,7 +99,7 @@ class LSTM_model(nn.Module):
         self.num_layers = num_layers
 
         kernel_conv2 = 2
-        c_out = 16
+        c_out = 8
         lstm_input_size = (input_size - (kernel_conv2 - 1))
 
         # first conv layer
@@ -104,12 +107,16 @@ class LSTM_model(nn.Module):
         self.relu1 = nn.ReLU()
 
         # second conv layer
-        c_out2 = c_out * 2
+        # c_out2 = c_out * 2
+        c_out2 = c_out
         self.conv2d_2 = nn.Conv2d(c_out, c_out2, kernel_size = 2)
         self.relu2 = nn.ReLU()
 
         self.lstm = nn.LSTM(c_out2 * lstm_input_size, hidden_size, num_layers, batch_first=True)
+        # self.lstm = nn.LSTM(c_out2 * lstm_input_size, hidden_size, num_layers, batch_first=True, bidirectional = True)
         self.linear = nn.Linear(hidden_size, output_size)
+            # if using bidirectional 
+        # self.linear = nn.Linear(hidden_size * 2, output_size)
 
         # self.softmax = nn.Softmax(1)
 
@@ -119,8 +126,11 @@ class LSTM_model(nn.Module):
     #   In our problem: every epoch, as it is one long sequence
     def reset_states(self):
         # hidden state and cell state for LSTM 
-        self.hn = torch.zeros(self.num_layers,  1, self.hidden_size)
-        self.cn = torch.zeros(self.num_layers, 1, self.hidden_size)
+        self.hn = torch.zeros(self.num_layers,  1, self.hidden_size).to(device)
+        self.cn = torch.zeros(self.num_layers, 1, self.hidden_size).to(device)
+            # if using bidrectional
+        # self.hn = torch.zeros(self.num_layers + 1,  1, self.hidden_size)
+        # self.cn = torch.zeros(self.num_layers + 1, 1, self.hidden_size)
 
     def forward(self, input, stateful):
         # pass through first conv layer
@@ -140,8 +150,11 @@ class LSTM_model(nn.Module):
             out, (self.hn, self.cn) = self.lstm(out, (self.hn.detach(), self.cn.detach())) 
             out = self.linear(out[:,-1,:])
         else:
-            hn = torch.zeros(self.num_layers,  1, self.hidden_size)
-            cn = torch.zeros(self.num_layers, 1, self.hidden_size)
+            hn = torch.zeros(self.num_layers,  1, self.hidden_size).to(device)
+            cn = torch.zeros(self.num_layers, 1, self.hidden_size).to(device)
+                # if biderctional
+            # hn = torch.zeros(self.num_layers + 1, 1, self.hidden_size)
+            # cn = torch.zeros(self.num_layers + 1, 1, self.hidden_size)
             out, (hn, cn) = self.lstm(out, (hn, cn)) 
             out = self.linear(out[:,-1,:])
 
@@ -151,8 +164,29 @@ def training(model, train_loader:DataLoader, test_loader:DataLoader, nr_epochs, 
     # running loss per epoch (avg)
     running_loss_train = 0.
     running_loss_test = 0.
+    
+    # calculate loss before for visualization:
+    for i, (inputs, labels) in enumerate(train_loader):
+        # forward
+        prediction = model(inputs, stateful)
+        # calculate loss
+        loss = loss_func(prediction, labels)
+        running_loss_train += loss.item()
+    for j, (inputs, labels) in enumerate(test_loader):
+        # forward pass
+        prediction = model(inputs, stateful)
+        # calculate loss
+        test_loss = loss_func(prediction, labels)
+        running_loss_test += test_loss.item()
 
-    for epoch in range(nr_epochs):
+    # add pre-training loss to tensorboard
+    writer.add_scalar("Running train loss", running_loss_train/len(train_loader), 0)
+    writer.add_scalar("Running test loss", running_loss_test/len(test_loader), 0)
+    running_loss_train = 0
+    running_loss_test = 0
+
+    # training loop
+    for epoch in range(1, nr_epochs):
         # reset lstm hidden and cell state (stateful lstm = reset states once per sequence)
         # if not, reset automatically each forward call
         if stateful:
@@ -190,14 +224,14 @@ def training(model, train_loader:DataLoader, test_loader:DataLoader, nr_epochs, 
         # print training running loss and add to tensorboard
         print("Epoch:", epoch, "  Train loss:", running_loss_train/len(train_loader),
                                 ", Test loss:", running_loss_test/len(test_loader))
-        # writer.add_scalar("Running train loss", running_loss_train/len(train_loader), epoch)
-        # writer.add_scalar("Running test loss", running_loss_test/len(test_loader), epoch)
+        writer.add_scalar("Running train loss", running_loss_train/len(train_loader), epoch)
+        writer.add_scalar("Running test loss", running_loss_test/len(test_loader), epoch)
         running_loss_train = 0
         running_loss_test = 0
 
 
     # tb writer flush
-    # writer.flush()
+    writer.flush()
 
 # create train and test dataset based on window size where one window of timesteps
 #   will predict the subsequential single timestep
@@ -223,6 +257,12 @@ def createTrainTestDataloaders(voices, split_size, window_size, batch_size):
     # create datasets
     train_dataset = NotesDataset(window_size, train_voices, all_voices)
     test_dataset = NotesDataset(window_size, test_voices, all_voices)
+    
+    # # to gpu if possible
+    # train_dataset.x = train_dataset.x.to(device)
+    # train_dataset.y = train_dataset.y.to(device)
+    # test_dataset.x = test_dataset.x.to(device)
+    # test_dataset.y = test_dataset.y.to(device)
 
     # create dataloaders
     train_loader = DataLoader(train_dataset, batch_size)
@@ -240,7 +280,7 @@ def main():
     print("Data shape (4 voices):", voices.shape)
 
     # Sliding window size used as input in model
-    window_size = 40
+    window_size = 24
     
     # batch_size for training network
     batch_size = 1
@@ -271,6 +311,9 @@ def main():
     #   multi lable one hot encoded prediction only works with BCEwithlogitloss
     loss_func = nn.BCEWithLogitsLoss()
     optimizer = optim.Adam(lstm_model.parameters(), lr=0.001)
+    
+    # to gpu if possible
+    lstm_model = lstm_model.to(device)
     
     # training loop
     epochs = 150
