@@ -164,29 +164,9 @@ def training(model, train_loader:DataLoader, test_loader:DataLoader, nr_epochs, 
     # running loss per epoch (avg)
     running_loss_train = 0.
     running_loss_test = 0.
-    
-    # calculate loss before for visualization:
-    for i, (inputs, labels) in enumerate(train_loader):
-        # forward
-        prediction = model(inputs, stateful)
-        # calculate loss
-        loss = loss_func(prediction, labels)
-        running_loss_train += loss.item()
-    for j, (inputs, labels) in enumerate(test_loader):
-        # forward pass
-        prediction = model(inputs, stateful)
-        # calculate loss
-        test_loss = loss_func(prediction, labels)
-        running_loss_test += test_loss.item()
-
-    # add pre-training loss to tensorboard
-    writer.add_scalar("Running train loss", running_loss_train/len(train_loader), 0)
-    writer.add_scalar("Running test loss", running_loss_test/len(test_loader), 0)
-    running_loss_train = 0
-    running_loss_test = 0
 
     # training loop
-    for epoch in range(1, nr_epochs):
+    for epoch in range(nr_epochs):
         # reset lstm hidden and cell state (stateful lstm = reset states once per sequence)
         # if not, reset automatically each forward call
         if stateful:
