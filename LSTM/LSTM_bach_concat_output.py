@@ -246,11 +246,7 @@ def training(model, train_loader:DataLoader, test_loader:DataLoader, nr_epochs, 
         if (test_loss < lowest_test_loss):
           lowest_test_loss = test_loss
     
-    # save hparams along with lowest train/test losses
-    writer.add_hparams(
-        {"window_size": model.window_size, "hidden_size": model.hidden_size, "conv_channels": model.conv_channels},
-        {"MinTrainLoss": lowest_train_loss, "MinTestLoss": lowest_test_loss},
-    )
+    return lowest_train_loss, lowest_test_loss
 
 # create train and test dataset based on window size where one window of timesteps
 #   will predict the subsequential single timestep
@@ -300,7 +296,7 @@ def main():
     
     # hyperparameters for fine-tuning
     hyperparams = dict(
-        window_size = [16, 32, 64],
+        window_size = [16, 32],
         hidden_size = [16, 32, 64],
         conv_channels = [8, 16, 32]
     )
@@ -335,13 +331,18 @@ def main():
         optimizer = optim.Adam(lstm_model.parameters(), lr=0.001)
         
         # to gpu if possible
-        # lstm_model = lstm_model.to(device)
+        lstm_model = lstm_model.to(device)
         
         # training loop
         epochs = 150
         stateful = True
-        training(lstm_model, train_loader, test_loader, epochs, optimizer, loss_func, stateful, writer)
-
+        lowest_test_loss, lowest_train_loss = training(lstm_model, train_loader, test_loader, epochs, optimizer, loss_func, stateful, writer)
+        
+        # save hparams along with lowest train/test losses
+        writer.add_hparams(
+            {"window_size": window_size, "hidden_size": hidden_size, "conv_channels": conv_channels},
+            {"MinTrainLoss": lowest_train_loss, "MinTestLoss": lowest_test_loss},
+        )
         # tb writer flush
         writer.flush()
 
