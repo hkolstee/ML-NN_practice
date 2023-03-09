@@ -2,6 +2,8 @@ import numpy as np
 import math
 import sys
 
+from itertools import product
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -9,14 +11,20 @@ from torch.utils.data import Dataset, DataLoader, Subset
 from torch.utils.data.sampler import SubsetRandomSampler
 
 from torch.utils.tensorboard import SummaryWriter
-writer = SummaryWriter()
+
+from tensorboard.plugins.hparams import api as hp
 
 from sklearn.preprocessing import StandardScaler
 
 from tqdm import tqdm
 
 # gpu if available (global variable for convenience)
-device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+device = torch.device("cpu")
+# device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+# print(device)
+# print(torch.cuda.device_count())
+# print(torch.cuda.get_device_name(0))
+# exit()
 
 # to find float index in unique float list of standardized array
 # works also for ints when not standardized
@@ -93,26 +101,41 @@ class NotesDataset(Dataset):
 # the model is stateful, meaning the internal hidden state and cell state is passed
 # into the model each batch and reset once per epoch
 class LSTM_model(nn.Module):
-    def __init__(self, input_size, output_size, hidden_size, num_layers, batch_size):
+    def __init__(self, input_size, output_size, hidden_size, num_layers, batch_size, channels):
         super(LSTM_model, self).__init__()
         self.hidden_size = hidden_size
         self.num_layers = num_layers
+        self.conv_channels = channels
 
-        kernel_conv2 = 2
-        c_out = 8
-        lstm_input_size = (input_size - (kernel_conv2 - 1))
+        # ReLU activation function
+        self.relu = nn.ReLU()
+
+        # max pool
+        self.pool = nn.MaxPool2d(2, 2)
 
         # first conv layer
-        self.conv2d_1 = nn.Conv2d(batch_size, c_out, kernel_size = 3, padding = 1)
-        self.relu1 = nn.ReLU()
+        padding = 1
+        kernel_conv2d = 2
+        c_out = channels
+        print(input_size, output_size, hidden_size, num_layers, batch_size, channels)
+        lstm_input_size = (input_size - (kernel_conv2d - 1) + padding)
+        self.conv2d_1 = nn.Conv2d(batch_size, c_out, kernel_size = kernel_conv2d, padding = padding)
 
         # second conv layer
-        # c_out2 = c_out * 2
-        c_out2 = c_out
-        self.conv2d_2 = nn.Conv2d(c_out, c_out2, kernel_size = 2)
-        self.relu2 = nn.ReLU()
+        padding = 1
+        kernel_conv2d += 1
+        c_out2 = c_out * 2
+        lstm_input_size = (input_size - (kernel_conv2d - 1) + padding)
+        self.conv2d_2 = nn.Conv2d(c_out, c_out2, kernel_size = kernel_conv2d + 1, padding = padding)
 
-        self.lstm = nn.LSTM(c_out2 * lstm_input_size, hidden_size, num_layers, batch_first=True)
+        # third conv layer
+        padding = 0
+        kernel_conv2d += 1
+        c_out3 = c_out2 * 2
+        lstm_input_size = (input_size - (kernel_conv2d - 1) + padding)
+        self.conv2d_3 = nn.Conv2d(c_out2, c_out3, kernel_size = kernel_conv2d, padding = padding)
+
+        self.lstm = nn.LSTM(c_out3 * lstm_input_size, hidden_size, num_layers, batch_first=True)
         # self.lstm = nn.LSTM(c_out2 * lstm_input_size, hidden_size, num_layers, batch_first=True, bidirectional = True)
         self.linear = nn.Linear(hidden_size, output_size)
             # if using bidirectional 
@@ -135,11 +158,15 @@ class LSTM_model(nn.Module):
     def forward(self, input, stateful):
         # pass through first conv layer
         out = self.conv2d_1(input)
-        out = self.relu1(out)
+        out = self.relu(out)
 
         # pass through second conv layer
         out = self.conv2d_2(out)
-        out = self.relu2(out)
+        out = self.relu(out)
+
+        # pass through third conv layer
+        out = self.conv2d_3(out)
+        out = self.relu(out)
 
         # reshape for the lstm
         out = out.view(1, out.size(1), -1)
@@ -160,13 +187,17 @@ class LSTM_model(nn.Module):
 
         return out
 
-def training(model, train_loader:DataLoader, test_loader:DataLoader, nr_epochs, optimizer, loss_func, stateful):
-    # running loss per epoch (avg)
-    running_loss_train = 0.
-    running_loss_test = 0.
-
+def training(model, train_loader:DataLoader, test_loader:DataLoader, nr_epochs, optimizer, loss_func, stateful, writer):
+    # lowest train/test loss
+    lowest_train_loss = np.inf
+    lowest_test_loss = np.inf
+    
     # training loop
-    for epoch in range(nr_epochs):
+    for epoch in range(1, nr_epochs):
+        # reset running loss
+        running_loss_train = 0
+        running_loss_test = 0
+
         # reset lstm hidden and cell state (stateful lstm = reset states once per sequence)
         # if not, reset automatically each forward call
         if stateful:
@@ -202,16 +233,24 @@ def training(model, train_loader:DataLoader, test_loader:DataLoader, nr_epochs, 
                 running_loss_test += test_loss.item()
 
         # print training running loss and add to tensorboard
-        print("Epoch:", epoch, "  Train loss:", running_loss_train/len(train_loader),
-                                ", Test loss:", running_loss_test/len(test_loader))
-        writer.add_scalar("Running train loss", running_loss_train/len(train_loader), epoch)
-        writer.add_scalar("Running test loss", running_loss_test/len(test_loader), epoch)
-        running_loss_train = 0
-        running_loss_test = 0
+        train_loss = running_loss_train/len(train_loader)
+        test_loss = running_loss_test/len(test_loader)
+        print("Epoch:", epoch, "  Train loss:", train_loss,
+                                ", Test loss:", test_loss)
+        writer.add_scalar("Running train loss", train_loss, epoch)
+        writer.add_scalar("Running test loss", test_loss, epoch)
 
-
-    # tb writer flush
-    writer.flush()
+        # check if lowest loss
+        if (train_loss < lowest_train_loss):
+          lowest_train_loss = train_loss
+        if (test_loss < lowest_test_loss):
+          lowest_test_loss = test_loss
+    
+    # save hparams along with lowest train/test losses
+    writer.add_hparams(
+        {"window_size": model.window_size, "hidden_size": model.hidden_size, "conv_channels": model.conv_channels},
+        {"MinTrainLoss": lowest_train_loss, "MinTestLoss": lowest_test_loss},
+    )
 
 # create train and test dataset based on window size where one window of timesteps
 #   will predict the subsequential single timestep
@@ -237,12 +276,6 @@ def createTrainTestDataloaders(voices, split_size, window_size, batch_size):
     # create datasets
     train_dataset = NotesDataset(window_size, train_voices, all_voices)
     test_dataset = NotesDataset(window_size, test_voices, all_voices)
-    
-    # # to gpu if possible
-    # train_dataset.x = train_dataset.x.to(device)
-    # train_dataset.y = train_dataset.y.to(device)
-    # test_dataset.x = test_dataset.x.to(device)
-    # test_dataset.y = test_dataset.y.to(device)
 
     # create dataloaders
     train_loader = DataLoader(train_dataset, batch_size)
@@ -259,46 +292,58 @@ def main():
     voices = np.delete(voices, slice(8), axis=0)
     print("Data shape (4 voices):", voices.shape)
 
-    # Sliding window size used as input in model
-    window_size = 24
-    
     # batch_size for training network
     batch_size = 1
-    
+
     # split, scale, create datasets, and then make dataloaders
     split_size = 0.1
-    train_loader, test_loader = createTrainTestDataloaders(voices, split_size, window_size, batch_size)
     
-    # Some informational print statements
-    features, labels = next(iter(train_loader))
-    print("TRAIN: input size:", features.size(), 
-          "- Output size:", labels.size(), 
-          "- Samples:", len(train_loader), 
-          "- TEST samples:", len(test_loader))
-    # print(features)
-    # print(labels)
+    # hyperparameters for fine-tuning
+    hyperparams = dict(
+        window_size = [16, 32, 64],
+        hidden_size = [16, 32, 64],
+        conv_channels = [8, 16, 32]
+    )
+    hyperparam_values = [value for value in hyperparams.values()]
 
-    # create model, nr_layers = number of sequential LSTM layers
-    # input size = number of expected features
-    # hidden size = number of features in hidden state 
-    hidden_size = 16
-    nr_layers = 1
-    input_size = voices.shape[1]
-    output_size = labels.size(1)
-    lstm_model = LSTM_model(input_size, output_size, hidden_size, nr_layers, batch_size)
+    for run_id, (window_size, hidden_size, conv_channels) in enumerate(product(*hyperparam_values)):
+        # tensorboard summary writer
+        writer = SummaryWriter(f'runs/window_size={window_size} hidden_size={hidden_size} conv_channels={conv_channels}')
+        
+        # Split data in train and test, scale, create datasets and create dataloaders
+        train_loader, test_loader = createTrainTestDataloaders(voices, split_size, window_size, batch_size)
 
-    # loss function and optimizer
-    #   multi lable one hot encoded prediction only works with BCEwithlogitloss
-    loss_func = nn.BCEWithLogitsLoss()
-    optimizer = optim.Adam(lstm_model.parameters(), lr=0.001)
-    
-    # to gpu if possible
-    lstm_model = lstm_model.to(device)
-    
-    # training loop
-    epochs = 150
-    stateful = False
-    training(lstm_model, train_loader, test_loader, epochs, optimizer, loss_func, stateful)
+        # some informational print statements
+        print("\nNew run window/hidden/channels:", window_size, "/", hidden_size, "/", conv_channels)
+        features, labels = next(iter(train_loader))
+        print("Input size:", features.size(), 
+            "- Output size:", labels.size(), 
+            "- TRAIN samples:", len(train_loader), 
+            "- TEST samples:", len(test_loader))
+        
+        # Input/output dimensions
+        input_size = voices.shape[1]
+        output_size = labels.size(1)
+        # How many LSTM layers stacked after each other
+        nr_layers = 1
+        # create model
+        lstm_model = LSTM_model(input_size, output_size, hidden_size, nr_layers, batch_size, conv_channels)
+
+        # loss function and optimizer
+        #   multi lable one hot encoded prediction only works with BCEwithlogitloss
+        loss_func = nn.BCEWithLogitsLoss()
+        optimizer = optim.Adam(lstm_model.parameters(), lr=0.001)
+        
+        # to gpu if possible
+        # lstm_model = lstm_model.to(device)
+        
+        # training loop
+        epochs = 150
+        stateful = True
+        training(lstm_model, train_loader, test_loader, epochs, optimizer, loss_func, stateful, writer)
+
+        # tb writer flush
+        writer.flush()
 
 if __name__ == '__main__':
     np.set_printoptions(threshold=sys.maxsize)

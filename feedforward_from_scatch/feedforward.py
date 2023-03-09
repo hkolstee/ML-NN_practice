@@ -97,7 +97,7 @@ class FeedForwardNN:
         self.__initWeights(nr_layers, w_topology)
         
         # set gradients to 0
-        self.__initGradients()
+        self.__resetGradients()
 
     # set activation functions and its derivative to call in the forward and backprop function
     def __setActivFunc(self, activ_func):
@@ -151,8 +151,8 @@ class FeedForwardNN:
             # append to list
             self.layers_weights.append(current_to_next)
 
-    # initialize gradients to 0
-    def __initGradients(self):
+    # reset gradients to 0
+    def resetGradients(self):
         self.gradients = []
         for i, weights in enumerate(self.layers_weights):
             self.gradients.append(np.zeros(weights.shape))
@@ -181,7 +181,7 @@ class FeedForwardNN:
         return out
     
     # backpropagation over network (SGD)
-    def backprop(self, input, output, target, loss_function, lr):
+    def backprop(self, input, output, target, loss_function):
         # check loss function
         if (loss_function == "BCELoss"):
             loss_func = BCELoss
@@ -197,22 +197,29 @@ class FeedForwardNN:
         # more info on inner workings: towardsdatascience.com -> understanding backpropagation
         #   np.vectorize(function)(array) works as map(function, array) function
         delta = loss_func_deriv(output, target) * np.vectorize(self.out_activ_func_deriv)(self.weighted_sums[-1])
-        gradients[-1] = delta * self.activ_vals[-1]    
+        self.gradients[-1] += delta * self.activ_vals[-1]    
         # rest of network weight gradients 
         # this is calculated by: gradient = dot(delta^T, dWsum/dActiv_value) * dActiv_value/dWsum * dWsum/dWeights
-        for i in reversed(range(len(gradients) - 1)):
+        for i in reversed(range(len(self.gradients) - 1)):
             # reached end -> need to use input as activation values
             if (i == 0):
                 delta = np.dot(delta, np.squeeze(self.layers_weights[i+1])) * np.vectorize(self.activ_func_deriv)(self.weighted_sums[i])
-                gradients[i] = np.array([input * error for error in delta])
+                self.gradients[i] += np.array([input * error for error in delta])
             # somewhere within hidden layer weights
             else:
                 delta = np.dot(delta, np.squeeze(self.layers_weights[i+1])) * np.vectorize(self.activ_func_deriv)(self.weighted_sums[i])
-                gradients[i] = np.array([self.activ_vals[i-1] * error for error in delta])
+                self.gradients[i] += np.array([self.activ_vals[i-1] * error for error in delta])
 
+    # take a step along the negative build up gradient (can be batch, or single sample, whenever you like)
+    #   backpropage over any number of samples, the build up gradient gets stored in the network
+    #   call step(), and a step is taken down this gradient, and the gradient is reset.
+    def step(self, lr):
         # change weights based on negative gradient times learning rate (SGD)
         for i in range(len(self.layers_weights)):
-            self.layers_weights[i] = self.layers_weights[i] - lr * gradients[i]
+            self.layers_weights[i] = self.layers_weights[i] - lr * self.gradients[i]
+
+        # reset gradients
+        self.__resetGradients()
 
     # get weights 
     def weights(self):
