@@ -1,20 +1,20 @@
 import numpy as np
 import math
 import sys
+import time
 
 from itertools import product
 
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import Dataset, DataLoader, Subset
-from torch.utils.data.sampler import SubsetRandomSampler
+from torch.utils.data import Dataset, DataLoader
 
 from torch.utils.tensorboard import SummaryWriter
 
-from tensorboard.plugins.hparams import api as hp
-
 from sklearn.preprocessing import StandardScaler
+
+from tensorboard.plugins.hparams import api as hp
 
 from tqdm import tqdm
 
@@ -24,10 +24,9 @@ device = torch.device("cpu")
 # print(device)
 # print(torch.cuda.device_count())
 # print(torch.cuda.get_device_name(0))
-# exit()
 
-# to find float index in unique float list of standardized array
-# works also for ints when not standardized
+# to find float index in unique float list of standar scaled array
+# works also for ints when not scaled
 def uniqueLocation(uniques, note):
     for index, unique in enumerate(uniques):
         if (math.isclose(unique, note, abs_tol=0.0001)):
@@ -110,40 +109,39 @@ class LSTM_model(nn.Module):
         # ReLU activation function
         self.relu = nn.ReLU()
 
+        # dropout layer
+        self.dropout = nn.Dropout(0.5) 
+
         # max pool
         self.pool = nn.MaxPool2d(2, 2)
 
-        # first conv layer
+         # first conv layer
         padding = 1
         kernel_conv2d = 2
         c_out = channels
-        print(input_size, output_size, hidden_size, num_layers, batch_size, channels)
-        lstm_input_size = (input_size - (kernel_conv2d - 1) + padding)
+        lstm_input_size = input_size - kernel_conv2d + (2 * padding) + 1
         self.conv2d_1 = nn.Conv2d(batch_size, c_out, kernel_size = kernel_conv2d, padding = padding)
 
         # second conv layer
         padding = 1
         kernel_conv2d += 1
         c_out2 = c_out * 2
-        lstm_input_size = (input_size - (kernel_conv2d - 1) + padding)
-        self.conv2d_2 = nn.Conv2d(c_out, c_out2, kernel_size = kernel_conv2d + 1, padding = padding)
+        lstm_input_size = lstm_input_size - kernel_conv2d + (2 * padding) + 1
+        self.conv2d_2 = nn.Conv2d(c_out, c_out2, kernel_size = kernel_conv2d, padding = padding)
 
         # third conv layer
         padding = 0
         kernel_conv2d += 1
         c_out3 = c_out2 * 2
-        lstm_input_size = (input_size - (kernel_conv2d - 1) + padding)
+        lstm_input_size = lstm_input_size - kernel_conv2d + (2 * padding) + 1
         self.conv2d_3 = nn.Conv2d(c_out2, c_out3, kernel_size = kernel_conv2d, padding = padding)
 
         self.lstm = nn.LSTM(c_out3 * lstm_input_size, hidden_size, num_layers, batch_first=True)
-        # self.lstm = nn.LSTM(c_out2 * lstm_input_size, hidden_size, num_layers, batch_first=True, bidirectional = True)
         self.linear = nn.Linear(hidden_size, output_size)
-            # if using bidirectional 
-        # self.linear = nn.Linear(hidden_size * 2, output_size)
 
-        # self.softmax = nn.Softmax(1)
-
-        # print("LSTM initialized with {} input size, {} hidden layer size, {} number of LSTM layers, and an output size of {}".format(input_size, hidden_size, num_layers, output_size))
+        print("LSTM initialized with {} input size, {} hidden layer size, {} number of LSTM layers, and an output size of {}".format(input_size, hidden_size, num_layers, output_size))
+        # reset states in case of stateless use
+        self.reset_states()
 
     # reset hidden state and cell state, should be before each new sequence
     #   In our problem: every epoch, as it is one long sequence
@@ -151,18 +149,21 @@ class LSTM_model(nn.Module):
         # hidden state and cell state for LSTM 
         self.hn = torch.zeros(self.num_layers,  1, self.hidden_size).to(device)
         self.cn = torch.zeros(self.num_layers, 1, self.hidden_size).to(device)
-            # if using bidrectional
-        # self.hn = torch.zeros(self.num_layers + 1,  1, self.hidden_size)
-        # self.cn = torch.zeros(self.num_layers + 1, 1, self.hidden_size)
 
     def forward(self, input, stateful):
         # pass through first conv layer
         out = self.conv2d_1(input)
         out = self.relu(out)
 
+        # dropout
+        out = self.dropout(out)
+
         # pass through second conv layer
         out = self.conv2d_2(out)
         out = self.relu(out)
+        
+        # dropout
+        # out = self.dropout(out)
 
         # pass through third conv layer
         out = self.conv2d_3(out)
@@ -179,9 +180,6 @@ class LSTM_model(nn.Module):
         else:
             hn = torch.zeros(self.num_layers,  1, self.hidden_size).to(device)
             cn = torch.zeros(self.num_layers, 1, self.hidden_size).to(device)
-                # if biderctional
-            # hn = torch.zeros(self.num_layers + 1, 1, self.hidden_size)
-            # cn = torch.zeros(self.num_layers + 1, 1, self.hidden_size)
             out, (hn, cn) = self.lstm(out, (hn, cn)) 
             out = self.linear(out[:,-1,:])
 
@@ -215,9 +213,7 @@ def training(model, train_loader:DataLoader, test_loader:DataLoader, nr_epochs, 
             loss.backward(retain_graph=True)
             # step
             optimizer.step()
-
-            # tensorboard for visualization
-            # writer.add_scalar("Loss/train", loss.item(), i + (epoch * len(train_loader)))
+            # add to running loss
             running_loss_train += loss.item()
     
         # Test evaluation
@@ -227,9 +223,7 @@ def training(model, train_loader:DataLoader, test_loader:DataLoader, nr_epochs, 
                 prediction = model(inputs, stateful)
                 # calculate loss
                 test_loss = loss_func(prediction, labels)
-
-                # tensorboard for visualization
-                # writer.add_scalar("Loss/test", test_loss.item(), j + (epoch * len(test_loader)))
+                # add to running loss
                 running_loss_test += test_loss.item()
 
         # print training running loss and add to tensorboard
@@ -242,9 +236,11 @@ def training(model, train_loader:DataLoader, test_loader:DataLoader, nr_epochs, 
 
         # check if lowest loss
         if (train_loss < lowest_train_loss):
-          lowest_train_loss = train_loss
+            lowest_train_loss = train_loss
+        # if lowest till now, save model (checkpointing)
         if (test_loss < lowest_test_loss):
-          lowest_test_loss = test_loss
+            lowest_test_loss = test_loss
+            torch.save(model.state_dict(), "models/model" + str(train_loader.dataset.x.shape[1]) + str(model.hidden_size) + str(model.conv_channels) + ".pth")
     
     return lowest_train_loss, lowest_test_loss
 
@@ -291,17 +287,18 @@ def main():
     # batch_size for training network
     batch_size = 1
 
-    # split, scale, create datasets, and then make dataloaders
+    # split size of test/train data
     split_size = 0.1
     
     # hyperparameters for fine-tuning
     hyperparams = dict(
-        window_size = [16, 32],
-        hidden_size = [16, 32, 64],
-        conv_channels = [8, 16, 32]
+        window_size = [24],
+        hidden_size = [24],
+        conv_channels = [16]
     )
     hyperparam_values = [value for value in hyperparams.values()]
 
+    # lowest test loss for choosing model
     for run_id, (window_size, hidden_size, conv_channels) in enumerate(product(*hyperparam_values)):
         # tensorboard summary writer
         writer = SummaryWriter(f'runs/window_size={window_size} hidden_size={hidden_size} conv_channels={conv_channels}')
@@ -336,7 +333,7 @@ def main():
         # training loop
         epochs = 150
         stateful = True
-        lowest_test_loss, lowest_train_loss = training(lstm_model, train_loader, test_loader, epochs, optimizer, loss_func, stateful, writer)
+        lowest_train_loss, lowest_test_loss = training(lstm_model, train_loader, test_loader, epochs, optimizer, loss_func, stateful, writer)
         
         # save hparams along with lowest train/test losses
         writer.add_hparams(
@@ -345,6 +342,7 @@ def main():
         )
         # tb writer flush
         writer.flush()
+
 
 if __name__ == '__main__':
     np.set_printoptions(threshold=sys.maxsize)
