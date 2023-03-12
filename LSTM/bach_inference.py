@@ -10,19 +10,61 @@ from sklearn.preprocessing import StandardScaler
 
 from LSTM_bach import LSTM_model, NotesDataset
 
+# to find float index in unique float list of standar scaled array
+# works also for ints when not scaled
+def uniqueLocation(uniques, note):
+    for index, unique in enumerate(uniques):
+        if (math.isclose(unique, note, abs_tol=0.0001)):
+            return index
+    return None    
 
-def calculateNotes():
-    pass
+def predictNextNotes(input, steps, lstm_model, voices, scaler):
+    # predicted notes
+    predicted_notes = np.zeros((1,4))
 
-def predictNextNotes(input, steps, lstm_model):
+    # all unique notes for each voice
+    unique_voice1 = np.unique(voices[:,0])
+    unique_voice2 = np.unique(voices[:,1])
+    unique_voice3 = np.unique(voices[:,2])
+    unique_voice4 = np.unique(voices[:,3])
+    one_hot_values = np.concatenate((unique_voice1, unique_voice2, unique_voice3, unique_voice4))
+
+    # BCEwithLogitLoss uses sigmoid when calculating loss, but we need to pass through
     sigmoid = nn.Sigmoid()
-    # for i in range(steps):
-    print(input.shape)
+
+    # prepare input
     input = torch.tensor(input, dtype=torch.float32).unsqueeze(0)
-    output = lstm_model(input, stateful=False)
-    output = sigmoid(output)
-    print(output)
-    
+    for i in range(steps):
+        # print(input.shape)
+        output = lstm_model(input, stateful=False)
+        output = sigmoid(output)
+        output = output.detach().numpy().squeeze()
+        
+        # get the indices with highest value from model forward output
+        note_voice1 = np.argmax(output[:len(unique_voice1)])
+        note_voice2 = np.argmax(output[len(unique_voice1) : len(unique_voice1) + len(unique_voice2)])
+        note_voice3 = np.argmax(output[len(unique_voice1) + len(unique_voice2) : len(unique_voice1) + len(unique_voice2) + len(unique_voice3)])
+        note_voice4 = np.argmax(output[-len(unique_voice4):])
+
+        # get notes
+        note_voice1 = one_hot_values[note_voice1]
+        note_voice2 = one_hot_values[len(unique_voice1) + note_voice2]
+        note_voice3 = one_hot_values[len(unique_voice1) + len(unique_voice2) + note_voice3]
+        note_voice4 = one_hot_values[len(unique_voice1) + len(unique_voice2) + len(unique_voice3) + note_voice4]
+
+        # add to array and inverse scale
+        next_notes = np.array([note_voice1, note_voice2, note_voice3, note_voice4])
+        next_notes_invscaled = scaler.inverse_transform(next_notes.reshape(1, -1))
+        predicted_notes = np.concatenate((predicted_notes, next_notes_invscaled), axis = 0)
+
+        # change input
+        # drop oldest notes
+        input = input[0][1:]
+        # concat predicted notes
+        input = torch.cat((input, torch.Tensor(next_notes).unsqueeze(0)))
+        input = input.unsqueeze(0)
+
+    return(predicted_notes.astype(np.int32)[1:])
 
 def main():
     # define parameters used here
@@ -61,11 +103,16 @@ def main():
 
     # take last sliding window in data and infer from there
     input = train_voices[-16:]
-    steps = 1000
-    predictNextNotes(input, steps, model)
+    steps = 200
+    new_music = predictNextNotes(input, steps, model, voices, scaler)
+
+    # save new music
+    np.savetxt(fname = "output/output.txt", X = new_music, fmt = "%d")
 
 if __name__ == '__main__':
     torch.set_printoptions(threshold=sys.maxsize)
     torch.set_printoptions(precision=3)
     torch.set_printoptions(sci_mode=False)
+    np.set_printoptions(threshold=sys.maxsize)
+    np.set_printoptions(precision=3)
     main()

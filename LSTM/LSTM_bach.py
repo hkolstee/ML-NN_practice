@@ -25,8 +25,8 @@ device = torch.device("cpu")
 # print(torch.cuda.device_count())
 # print(torch.cuda.get_device_name(0))
 
-# to find float index in unique float list of standardized array
-# works also for ints when not standardized
+# to find float index in unique float list of standar scaled array
+# works also for ints when not scaled
 def uniqueLocation(uniques, note):
     for index, unique in enumerate(uniques):
         if (math.isclose(unique, note, abs_tol=0.0001)):
